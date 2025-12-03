@@ -1,0 +1,63 @@
+[project]
+name = "myagent-workspace"
+version = "0.1.0"
+description = "Lightweight LangGraph-compatible agent framework"
+requires-python = ">=3.10"
+dependencies = [
+    "myagent-core",
+    "myagent",
+]
+
+[tool.uv.sources]
+myagent-core = { workspace = true }
+myagent = { workspace = true }
+
+[tool.uv.workspace]
+members = ["src/myagent_core", "src/myagent"]
+
+[dependency-groups]
+dev = [
+    "langgraph>=1.1.2",
+    "pre-commit>=4.5",
+    "pyright>=1.1.407",
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6",
+    "ruff>=0.14",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = [
+    "myagent_core",
+    "myagent",
+]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+exclude_also = [
+    "if __name__ == .__main__.",
+    "raise NotImplementedError",
+]
+
+[tool.ruff]
+include = [
+    "src/**/*.py",
+    "tests/**/*.py",
+]
+line-length = 120
+
+[tool.ruff.lint]
+extend-select = ["I"]
+
+[tool.pyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+include = ["src", "tests"]
+exclude = ["**/__pycache__/"]
+venvPath = "."
+venv = ".venv"

@@ -1,0 +1,12 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "myagent-core"
+version = "0.1.0"
+description = "Core runnable primitives for myagent"
+requires-python = ">=3.10"
+
+[tool.hatch.build.targets.wheel]
+packages = ["myagent_core"]

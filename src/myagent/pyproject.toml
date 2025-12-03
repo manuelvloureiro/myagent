@@ -1,0 +1,15 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "myagent"
+version = "0.1.0"
+description = "Lightweight LangGraph-compatible graph engine"
+requires-python = ">=3.10"
+dependencies = [
+    "myagent-core",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["myagent"]
