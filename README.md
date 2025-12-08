@@ -12,10 +12,24 @@ the full dependency tree.
 The goal is simple: if your code works with myagent, it should work with LangChain/LangGraph too
 (and vice versa for the supported surface area).
 
+## Overview
+
+The project is organized as a uv workspace with two packages:
+
+- **myagent-core**: Zero-dependency foundation providing the `Runnable` abstraction - the universal
+  execution interface shared by every component.
+- **myagent**: The graph engine built on top of myagent-core.
+
 ## Environment Setup
 
 ```shell
 uv sync
+```
+
+## Running Tests
+
+```shell
+uv run pytest tests/ -v
 ```
 
 ## License
