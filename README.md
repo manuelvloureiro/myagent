@@ -37,8 +37,8 @@ uv sync
 ## Running Tests
 
 ```shell
-# Full suite
-uv run pytest tests/ -v
+# Full suite with coverage
+uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=80
 
 # Single test file
 uv run pytest tests/test_core/test_runnable.py -v
@@ -54,6 +54,19 @@ The core package provides the foundational `Runnable[Input, Output]` interface:
 - **RunnableConfig**: TypedDict carrying tags, metadata, callbacks, configurable dict, recursion limit
 - **RunnableLambda**: Wraps plain functions as Runnables with automatic config injection
 - **JsonPlusSerializer**: Extended JSON serialization for datetime, UUID, Decimal, bytes, set, frozenset
+
+### Channels
+
+Channels are typed state containers used by the graph engine:
+
+- **LastValue**: Default channel - stores the last written value
+- **BinaryOperatorAggregate**: Folds updates via a reducer function (e.g., `operator.add` for lists)
+- **EphemeralValue**: Temporary channel cleared each superstep
+
+### Checkpointing
+
+- **BaseCheckpointSaver**: Abstract interface for persisting graph state
+- **InMemorySaver**: Dict-backed storage keyed by thread_id
 
 ## License
 
