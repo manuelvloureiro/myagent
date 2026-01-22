@@ -26,7 +26,8 @@ The project is organized as a uv workspace with two packages:
 1. [Environment Setup](#environment-setup)
 2. [Running Tests](#running-tests)
 3. [Architecture](#architecture)
-4. [License](#license)
+4. [Usage](#usage)
+5. [License](#license)
 
 ## Environment Setup
 
@@ -42,6 +43,12 @@ uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=80
 
 # Single test file
 uv run pytest tests/test_core/test_runnable.py -v
+
+# Compat tests (verify API compatibility with LangGraph)
+uv run pytest tests/test_compat/ -v
+
+# Run compat tests against real LangGraph
+uv run pytest tests/test_compat/ --langgraph -v
 ```
 
 ## Architecture
@@ -55,18 +62,41 @@ The core package provides the foundational `Runnable[Input, Output]` interface:
 - **RunnableLambda**: Wraps plain functions as Runnables with automatic config injection
 - **JsonPlusSerializer**: Extended JSON serialization for datetime, UUID, Decimal, bytes, set, frozenset
 
-### Channels
+### Graph Engine (myagent)
 
-Channels are typed state containers used by the graph engine:
+- **StateGraph**: Builder that introspects TypedDict schemas to create typed channels.
+  Supports `Annotated[T, reducer]` for custom field reducers.
+- **Pregel**: Superstep execution engine. Each step: plan eligible nodes -> check interrupts ->
+  snapshot state -> execute nodes concurrently -> apply updates via channel reducers -> stream -> checkpoint.
+- **Channels**: `LastValue` (default), `BinaryOperatorAggregate` (reducer-based), `EphemeralValue` (cleared each superstep)
+- **Checkpointing**: `BaseCheckpointSaver` -> `InMemorySaver`. Multi-turn via `thread_id` in config.
+- **MessagesState**: Pre-built state with `add_messages` reducer for chat-style applications.
 
-- **LastValue**: Default channel - stores the last written value
-- **BinaryOperatorAggregate**: Folds updates via a reducer function (e.g., `operator.add` for lists)
-- **EphemeralValue**: Temporary channel cleared each superstep
+### Error Handling
 
-### Checkpointing
+- `GraphRecursionError`: Exceeds recursion limit
+- `EmptyChannelError`: Reading from uninitialized channel
+- `InvalidUpdateError`: Channel update invalid for type
+- `NodeInterrupt`: Execution interrupted
 
-- **BaseCheckpointSaver**: Abstract interface for persisting graph state
-- **InMemorySaver**: Dict-backed storage keyed by thread_id
+## Usage
+
+```python
+from myagent import StateGraph, START, END
+from typing import TypedDict
+
+class State(TypedDict):
+    count: int
+
+graph = StateGraph(State)
+graph.add_node("increment", lambda s: {"count": s["count"] + 1})
+graph.add_edge(START, "increment")
+graph.add_edge("increment", END)
+app = graph.compile()
+
+result = app.invoke({"count": 0})
+print(result)  # {"count": 1}
+```
 
 ## License
 
