@@ -16,8 +16,8 @@ The goal is simple: if your code works with myagent, it should work with LangCha
 
 The project is organized as a uv workspace with two packages:
 
-- **myagent-core**: Zero-dependency foundation providing the `Runnable` abstraction - the universal
-  execution interface shared by every component.
+- **myagent-core**: Zero-dependency foundation providing the `Runnable` abstraction, composition
+  primitives, message types, prompt templates, chat model interface, tools, and output parsers.
 - **myagent**: The graph engine built on top of myagent-core, providing `StateGraph`, channels,
   checkpointing, and the Pregel execution engine.
 
@@ -27,7 +27,8 @@ The project is organized as a uv workspace with two packages:
 2. [Running Tests](#running-tests)
 3. [Architecture](#architecture)
 4. [Usage](#usage)
-5. [License](#license)
+5. [Changelog](#changelog)
+6. [License](#license)
 
 ## Environment Setup
 
@@ -49,18 +50,44 @@ uv run pytest tests/test_compat/ -v
 
 # Run compat tests against real LangGraph
 uv run pytest tests/test_compat/ --langgraph -v
+
+# Linting and formatting
+uv run ruff check src/ tests/
+uv run ruff format src/ tests/
+
+# Type checking
+uv run pyright
 ```
 
 ## Architecture
 
 ### myagent-core
 
-The core package provides the foundational `Runnable[Input, Output]` interface:
+The core package provides the foundational abstractions:
 
+**Runnable Interface:**
 - **Runnable**: Abstract base with `invoke`, `ainvoke`, `stream`, `astream`, `batch`, `abatch`
 - **RunnableConfig**: TypedDict carrying tags, metadata, callbacks, configurable dict, recursion limit
 - **RunnableLambda**: Wraps plain functions as Runnables with automatic config injection
-- **JsonPlusSerializer**: Extended JSON serialization for datetime, UUID, Decimal, bytes, set, frozenset
+
+**Composition Primitives:**
+- **RunnableSequence**: Chains Runnables in series - powers the `|` pipe operator
+- **RunnableParallel**: Runs multiple Runnables concurrently, returns a dict
+- **RunnablePassthrough**: Identity passthrough with `.assign()` for adding computed keys
+- **RunnableBranch**: Conditional routing based on input predicates
+
+**Messages & Prompts:**
+- **Message types**: `HumanMessage`, `AIMessage`, `SystemMessage`, `ToolMessage`, `ToolCall`
+- **ChatPromptTemplate**: Template with variable substitution producing message lists
+- **PromptTemplate**: Simple string formatting
+
+**Chat Models:**
+- **BaseChatModel**: Abstract Runnable for chat model integration
+- **FakeListChatModel** / **FakeToolCallingModel**: Test doubles
+
+**Tools & Parsers:**
+- **BaseTool** / `@tool` decorator: Wraps functions with name/description/schema
+- **StrOutputParser**, **JsonOutputParser**, **PydanticOutputParser**
 
 ### Graph Engine (myagent)
 
@@ -72,14 +99,20 @@ The core package provides the foundational `Runnable[Input, Output]` interface:
 - **Checkpointing**: `BaseCheckpointSaver` -> `InMemorySaver`. Multi-turn via `thread_id` in config.
 - **MessagesState**: Pre-built state with `add_messages` reducer for chat-style applications.
 
-### Error Handling
+### Intentionally Excluded
 
-- `GraphRecursionError`: Exceeds recursion limit
-- `EmptyChannelError`: Reading from uninitialized channel
-- `InvalidUpdateError`: Channel update invalid for type
-- `NodeInterrupt`: Execution interrupted
+The following LangChain/LangGraph features are deliberately out of scope:
+
+- `Send()` dynamic fan-out, `Command(resume=...)`
+- Stream modes beyond `values` / `updates`
+- Subgraph nested checkpointing, `get_state_history`
+- Visualization (`get_graph`, Mermaid)
+- Document loaders, text splitters, embeddings, vector stores, retrievers
+- Real LLM provider integrations (users wrap their own)
 
 ## Usage
+
+### Simple Graph
 
 ```python
 from myagent import StateGraph, START, END
@@ -97,6 +130,43 @@ app = graph.compile()
 result = app.invoke({"count": 0})
 print(result)  # {"count": 1}
 ```
+
+### Chain with Pipe Operator
+
+```python
+from myagent_core import ChatPromptTemplate, StrOutputParser, FakeListChatModel
+
+prompt = ChatPromptTemplate.from_messages([
+    ("system", "You are a {role}."),
+    ("human", "{question}"),
+])
+model = FakeListChatModel(responses=["42"])
+parser = StrOutputParser()
+
+chain = prompt | model | parser
+result = chain.invoke({"role": "math tutor", "question": "What is 6*7?"})
+print(result)  # "42"
+```
+
+### Tools
+
+```python
+from myagent_core import tool
+
+@tool
+def search(query: str) -> str:
+    """Search the web for information."""
+    return f"Results for: {query}"
+
+print(search.invoke({"query": "myagent"}))
+```
+
+## Changelog
+
+### 0.1.0
+
+Initial release with LangGraph-compatible graph engine and LangChain-compatible
+composition primitives, messages, prompts, chat models, tools, and output parsers.
 
 ## License
 
