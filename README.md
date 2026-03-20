@@ -39,8 +39,8 @@ uv sync
 ## Running Tests
 
 ```shell
-# Full suite with coverage
-uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=80
+# Full suite with coverage (90% minimum)
+uv run pytest tests/ --cov --cov-report=term-missing --cov-fail-under=90
 
 # Single test file
 uv run pytest tests/test_core/test_runnable.py -v
@@ -57,6 +57,9 @@ uv run ruff format src/ tests/
 
 # Type checking
 uv run pyright
+
+# Pre-commit (all checks)
+uv run pre-commit run --all-files
 ```
 
 ## Architecture
@@ -88,6 +91,9 @@ The core package provides the foundational abstractions:
 **Tools & Parsers:**
 - **BaseTool** / `@tool` decorator: Wraps functions with name/description/schema
 - **StrOutputParser**, **JsonOutputParser**, **PydanticOutputParser**
+
+**Serialization:**
+- **JsonPlusSerializer**: Extended JSON for datetime, UUID, Decimal, bytes, set, frozenset
 
 ### Graph Engine (myagent)
 
