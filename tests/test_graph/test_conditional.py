@@ -108,3 +108,10 @@ class TestConditionalEdges:
 
         with pytest.raises(RuntimeError, match="boom"):
             app.invoke({"value": "", "route": "a"})
+
+    def test_then_is_explicitly_unsupported(self):
+        graph = StateGraph(RouterState)
+        graph.add_node("start_node", lambda s: s)
+
+        with pytest.raises(NotImplementedError, match="then"):
+            graph.add_conditional_edges("start_node", lambda s: "a", {"a": "a"}, then="next")

@@ -60,7 +60,10 @@ class BaseChatModel(Runnable[Any, AIMessage]):
         **kwargs: Any,
     ) -> AIMessage:
         """Async version of _generate. Default runs sync in executor."""
-        return await asyncio.get_event_loop().run_in_executor(None, self._generate, messages, stop)
+        return await asyncio.get_event_loop().run_in_executor(
+            None,
+            lambda: self._generate(messages, stop=stop, **kwargs),
+        )
 
     def _coerce_input(self, input: Any) -> list[BaseMessage]:
         """Coerce input to a list of messages."""

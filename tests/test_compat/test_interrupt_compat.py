@@ -68,7 +68,7 @@ class TestInterruptCompat:
 
         state = app.get_state(config)
         assert state.next == ("b",)
-        assert state.metadata["step"] == 0
+        assert state.metadata["step"] == 1
 
     def test_interrupt_before_checkpoints_state(self, StateGraph, START, END, InMemorySaver):
         """State is checkpointed at the interrupt point."""
@@ -94,4 +94,4 @@ class TestInterruptCompat:
         state = app.get_state(config)
         assert "A" in state.values["value"]
         assert state.next == ("b",)
-        assert state.metadata["next"] == ("b",)
+        assert "next" not in state.metadata

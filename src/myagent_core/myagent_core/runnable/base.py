@@ -115,7 +115,7 @@ class Runnable(ABC, Generic[Input, Output]):
         Returns:
             List of outputs, one per input.
         """
-        configs = [config] * len(inputs) if not isinstance(config, list) else config
+        configs = _expand_batch_configs(config, len(inputs))
         with ThreadPoolExecutor() as executor:
             return list(executor.map(self.invoke, inputs, configs))
 
@@ -125,13 +125,7 @@ class Runnable(ABC, Generic[Input, Output]):
         config: Optional[RunnableConfig | Sequence[RunnableConfig]] = None,
     ) -> list[Output]:
         """Async version of :meth:`batch` using ``asyncio.gather``."""
-        configs: Sequence[Optional[RunnableConfig]]
-        if isinstance(config, list):
-            configs = config
-        elif isinstance(config, dict) or config is None:
-            configs = [config] * len(inputs)
-        else:
-            configs = list(config)
+        configs = _expand_batch_configs(config, len(inputs))
         return await asyncio.gather(*(self.ainvoke(inp, c) for inp, c in zip(inputs, configs)))
 
     def pipe(self, *others: Any) -> Runnable:
@@ -165,3 +159,12 @@ class Runnable(ABC, Generic[Input, Output]):
         left = other.steps if isinstance(other, RunnableSequence) else [other]
         right = self.steps if isinstance(self, RunnableSequence) else [self]
         return RunnableSequence(steps_list=left + right)
+
+
+def _expand_batch_configs(
+    config: Optional[RunnableConfig | Sequence[RunnableConfig]],
+    input_count: int,
+) -> Sequence[Optional[RunnableConfig]]:
+    if config is None or isinstance(config, dict):
+        return [config] * input_count
+    return list(config)

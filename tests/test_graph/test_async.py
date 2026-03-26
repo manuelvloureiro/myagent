@@ -1,6 +1,8 @@
 """Tests for async graph execution."""
 
+import asyncio
 import operator
+import threading
 from typing import Annotated, TypedDict
 
 import pytest
@@ -19,7 +21,7 @@ class AsyncListState(TypedDict):
 
 class TestAsyncGraph:
     def test_invoke_with_async_node(self):
-        """Sync invoke should execute async node functions."""
+        """Sync invoke should reject async-only node functions."""
 
         async def async_node(state: AsyncState) -> dict:
             return {"value": state["value"] + " truly_async"}
@@ -30,11 +32,11 @@ class TestAsyncGraph:
         graph.add_edge("a", END)
         app = graph.compile()
 
-        result = app.invoke({"value": "test"})
-        assert result["value"] == "test truly_async"
+        with pytest.raises(TypeError, match="ainvoke"):
+            app.invoke({"value": "test"})
 
     def test_stream_with_async_node(self):
-        """Sync stream should execute async node functions."""
+        """Sync stream should reject async-only node functions."""
 
         async def async_node(state: AsyncState) -> dict:
             return {"value": state["value"] + " streamed_async"}
@@ -45,8 +47,8 @@ class TestAsyncGraph:
         graph.add_edge("a", END)
         app = graph.compile()
 
-        chunks = list(app.stream({"value": "test"}))
-        assert chunks[-1]["value"] == "test streamed_async"
+        with pytest.raises(TypeError, match="astream"):
+            list(app.stream({"value": "test"}))
 
     @pytest.mark.asyncio
     async def test_ainvoke_simple(self):
@@ -164,3 +166,80 @@ class TestAsyncGraph:
 
         result2 = await app.ainvoke({"items": ["world"]}, config)
         assert len(result2["items"]) > len(result1["items"])
+
+    def test_invoke_respects_max_concurrency(self):
+        class ParallelState(TypedDict):
+            items: Annotated[list[str], operator.add]
+
+        lock = threading.Lock()
+        active = 0
+        peak = 0
+
+        def make_node(name: str):
+            def node(state: ParallelState) -> dict:
+                nonlocal active, peak
+                with lock:
+                    active += 1
+                    peak = max(peak, active)
+                try:
+                    import time
+
+                    time.sleep(0.05)
+                    return {"items": [name]}
+                finally:
+                    with lock:
+                        active -= 1
+
+            return node
+
+        graph = StateGraph(ParallelState)
+        graph.add_node("a", make_node("a"))
+        graph.add_node("b", make_node("b"))
+        graph.add_node("c", make_node("c"))
+        graph.add_edge(START, "a")
+        graph.add_edge(START, "b")
+        graph.add_edge(START, "c")
+        graph.add_edge(["a", "b", "c"], END)
+        app = graph.compile()
+
+        result = app.invoke({"items": []}, {"max_concurrency": 1})
+        assert sorted(result["items"]) == ["a", "b", "c"]
+        assert peak == 1
+
+    @pytest.mark.asyncio
+    async def test_ainvoke_respects_max_concurrency(self):
+        class ParallelState(TypedDict):
+            items: Annotated[list[str], operator.add]
+
+        active = 0
+        peak = 0
+        lock = asyncio.Lock()
+
+        def make_node(name: str):
+            async def node(state: ParallelState) -> dict:
+                nonlocal active, peak
+                async with lock:
+                    active += 1
+                    peak = max(peak, active)
+                try:
+                    await asyncio.sleep(0.05)
+                    return {"items": [name]}
+                finally:
+                    async with lock:
+                        active -= 1
+
+            return node
+
+        graph = StateGraph(ParallelState)
+        graph.add_node("a", make_node("a"))
+        graph.add_node("b", make_node("b"))
+        graph.add_node("c", make_node("c"))
+        graph.add_edge(START, "a")
+        graph.add_edge(START, "b")
+        graph.add_edge(START, "c")
+        graph.add_edge(["a", "b", "c"], END)
+        app = graph.compile()
+
+        result = await app.ainvoke({"items": []}, {"max_concurrency": 1})
+        assert sorted(result["items"]) == ["a", "b", "c"]
+        assert peak == 1

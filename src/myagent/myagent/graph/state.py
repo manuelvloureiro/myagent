@@ -43,6 +43,7 @@ class StateGraph:
         self._edges: dict[str, list[str]] = {}  # source -> [target]
         self._conditional_edges: dict[str, list[tuple[Callable, Optional[dict[str, str]]]]] = {}
         self._channels: dict[str, BaseChannel] = {}
+        self._subgraphs: dict[str, tuple[Any, Callable, Callable]] = {}
 
         # Introspect state schema to build channels
         self._build_channels()
@@ -89,6 +90,18 @@ class StateGraph:
         self._node_retry_policies[name] = policy
         return self
 
+    def add_subgraph(
+        self,
+        name: str,
+        compiled_graph: Any,
+        *,
+        input_map: Callable,
+        output_map: Callable,
+    ) -> StateGraph:
+        """Add a compiled sub-graph as a node."""
+        self._subgraphs[name] = (compiled_graph, input_map, output_map)
+        return self
+
     def add_edge(
         self,
         source: Union[str, list[str]],
@@ -111,6 +124,8 @@ class StateGraph:
         then: Optional[str] = None,
     ) -> StateGraph:
         """Add conditional edges from source using a router function."""
+        if then is not None:
+            raise NotImplementedError("add_conditional_edges(..., then=...) is not supported in myagent")
         self._conditional_edges.setdefault(source, []).append((path, path_map))
         return self
 
@@ -151,6 +166,12 @@ class StateGraph:
                 retry_policy=self._node_retry_policies.get(name),
             )
 
+        for name, (compiled, input_map, output_map) in self._subgraphs.items():
+            nodes[name] = PregelNode(
+                name=name,
+                bound=_make_subgraph_wrapper(compiled, input_map, output_map),
+            )
+
         return CompiledStateGraph(
             nodes=nodes,
             channels=self._channels,
@@ -163,3 +184,27 @@ class StateGraph:
             interrupt_after=interrupt_after or [],
             builder=self,
         )
+
+
+def _make_subgraph_wrapper(
+    compiled_graph: Any,
+    input_map: Callable,
+    output_map: Callable,
+) -> Callable:
+    async def _async_invoke(state: dict) -> dict:
+        sub_input = input_map(state)
+        result = await compiled_graph.ainvoke(sub_input)
+        return output_map(result, state)
+
+    def _wrapper(state: dict) -> Any:
+        sub_input = input_map(state)
+        try:
+            import asyncio
+
+            asyncio.get_running_loop()
+        except RuntimeError:
+            result = compiled_graph.invoke(sub_input)
+            return output_map(result, state)
+        return _async_invoke(state)
+
+    return _wrapper
