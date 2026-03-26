@@ -43,6 +43,7 @@ class StateGraph:
         self._edges: dict[str, list[str]] = {}  # source -> [target]
         self._conditional_edges: dict[str, list[tuple[Callable, Optional[dict[str, str]]]]] = {}
         self._channels: dict[str, BaseChannel] = {}
+        self._subgraphs: dict[str, tuple[Any, Callable, Callable]] = {}  # name -> (compiled, input_map, output_map)
 
         # Introspect state schema to build channels
         self._build_channels()
@@ -87,6 +88,33 @@ class StateGraph:
         policy = retry_policy or retry
         self._nodes[name] = action
         self._node_retry_policies[name] = policy
+        return self
+
+    def add_subgraph(
+        self,
+        name: str,
+        compiled_graph: Any,
+        *,
+        input_map: Callable,
+        output_map: Callable,
+    ) -> StateGraph:
+        """Add a compiled sub-graph as a node.
+
+        The sub-graph runs its own superstep loop within a single parent
+        superstep.  ``input_map`` extracts sub-graph input from the parent
+        state; ``output_map`` merges sub-graph output back into parent
+        state updates.
+
+        Args:
+            name: Node name in the parent graph.
+            compiled_graph: A compiled ``StateGraph`` (has ``.invoke()``
+                and ``.ainvoke()``).
+            input_map: ``(parent_state: dict) -> dict`` producing the
+                sub-graph's input.
+            output_map: ``(child_result: dict, parent_state: dict) -> dict``
+                producing updates to write back to the parent's channels.
+        """
+        self._subgraphs[name] = (compiled_graph, input_map, output_map)
         return self
 
     def add_edge(
@@ -151,6 +179,14 @@ class StateGraph:
                 retry_policy=self._node_retry_policies.get(name),
             )
 
+        # Build subgraph wrapper nodes
+        for name, (compiled, input_map, output_map) in self._subgraphs.items():
+            nodes[name] = PregelNode(
+                name=name,
+                bound=_make_subgraph_wrapper(compiled, input_map, output_map),
+                metadata={"is_subgraph": True},
+            )
+
         return CompiledStateGraph(
             nodes=nodes,
             channels=self._channels,
@@ -163,3 +199,34 @@ class StateGraph:
             interrupt_after=interrupt_after or [],
             builder=self,
         )
+
+
+def _make_subgraph_wrapper(
+    compiled_graph: Any,
+    input_map: Callable,
+    output_map: Callable,
+) -> Callable:
+    """Create a node function that invokes a compiled sub-graph.
+
+    The wrapper detects whether it's running in an async context and
+    calls ``ainvoke`` or ``invoke`` accordingly.
+    """
+    import inspect
+
+    async def _async_wrapper(state: dict) -> dict:
+        sub_input = input_map(state)
+        if inspect.iscoroutinefunction(getattr(compiled_graph, "ainvoke", None)):
+            result = await compiled_graph.ainvoke(sub_input)
+        else:
+            result = compiled_graph.invoke(sub_input)
+        return output_map(result, state)
+
+    def _sync_wrapper(state: dict) -> dict:
+        sub_input = input_map(state)
+        result = compiled_graph.invoke(sub_input)
+        return output_map(result, state)
+
+    # Return an async wrapper so the Pregel engine can detect and await it.
+    # The sync fallback is handled by _run_sync_node in loop.py which calls
+    # asyncio.run() on coroutines.
+    return _async_wrapper
