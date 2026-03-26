@@ -186,25 +186,38 @@ class StateGraph:
         )
 
 
+class _SubgraphNode:
+    """Callable node that invokes a compiled sub-graph.
+
+    Provides both sync and async entry points so the Pregel engine can
+    call ``invoke()`` or ``ainvoke()`` without runtime context detection.
+    The sync ``__call__`` delegates to ``compiled_graph.invoke()``; the
+    async path is exposed via the ``ainvoke`` coroutine attribute which
+    ``_maybe_await`` picks up in the async engine.
+    """
+
+    __slots__ = ("_graph", "_input_map", "_output_map")
+
+    def __init__(self, compiled_graph: Any, input_map: Callable, output_map: Callable) -> None:
+        self._graph = compiled_graph
+        self._input_map = input_map
+        self._output_map = output_map
+
+    def __call__(self, state: dict) -> dict:
+        sub_input = self._input_map(state)
+        result = self._graph.invoke(sub_input)
+        return self._output_map(result, state)
+
+    async def ainvoke(self, state: dict) -> dict:
+        sub_input = self._input_map(state)
+        result = await self._graph.ainvoke(sub_input)
+        return self._output_map(result, state)
+
+
 def _make_subgraph_wrapper(
     compiled_graph: Any,
     input_map: Callable,
     output_map: Callable,
-) -> Callable:
-    async def _async_invoke(state: dict) -> dict:
-        sub_input = input_map(state)
-        result = await compiled_graph.ainvoke(sub_input)
-        return output_map(result, state)
-
-    def _wrapper(state: dict) -> Any:
-        sub_input = input_map(state)
-        try:
-            import asyncio
-
-            asyncio.get_running_loop()
-        except RuntimeError:
-            result = compiled_graph.invoke(sub_input)
-            return output_map(result, state)
-        return _async_invoke(state)
-
-    return _wrapper
+) -> _SubgraphNode:
+    """Create a node callable that invokes a compiled sub-graph."""
+    return _SubgraphNode(compiled_graph, input_map, output_map)

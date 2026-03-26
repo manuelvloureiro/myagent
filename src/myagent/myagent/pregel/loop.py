@@ -830,17 +830,20 @@ async def _run_async_node(
     *,
     max_concurrency: Optional[int] = None,
 ) -> Any:
+    # Prefer an explicit async entry point (e.g. subgraph nodes expose .ainvoke)
+    bound = node.bound
+    ainvoke = getattr(bound, "ainvoke", None)
+
+    def _invoke():
+        if ainvoke is not None:
+            return ainvoke(state)
+        return _maybe_await(bound(state))
+
     if max_concurrency is None:
-        return await arun_with_retry(
-            lambda: _maybe_await(node.bound(state)),
-            node.retry_policy,
-        )
+        return await arun_with_retry(_invoke, node.retry_policy)
 
     async with _get_concurrency_semaphore(max_concurrency):
-        return await arun_with_retry(
-            lambda: _maybe_await(node.bound(state)),
-            node.retry_policy,
-        )
+        return await arun_with_retry(_invoke, node.retry_policy)
 
 
 def _get_concurrency_semaphore(limit: int) -> asyncio.Semaphore:
