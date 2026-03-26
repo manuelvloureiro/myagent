@@ -1,5 +1,6 @@
 """Tests for chat model interface."""
 
+import pytest
 from myagent_core.chat_models import FakeListChatModel, FakeToolCallingModel
 from myagent_core.messages import AIMessage, HumanMessage, SystemMessage, ToolCall
 
@@ -91,6 +92,18 @@ class TestBindTools:
         bound = model.bind_tools(["tool1"])
         result = bound.invoke("hello")
         assert result.content == "hi"
+
+
+class TestAsyncGenerateParity:
+    @pytest.mark.asyncio
+    async def test_ainvoke_forwards_kwargs(self):
+        class KwargModel(FakeListChatModel):
+            def _generate(self, messages, stop=None, **kwargs):
+                return AIMessage(content=kwargs["suffix"])
+
+        model = KwargModel(responses=["unused"])
+        result = await model.ainvoke("hello", suffix="forwarded")
+        assert result.content == "forwarded"
 
 
 class TestInputCoercion:

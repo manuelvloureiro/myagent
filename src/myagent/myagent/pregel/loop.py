@@ -198,6 +198,7 @@ class Pregel(Runnable[dict, dict]):
         config = ensure_config(config)
         mode = stream_mode or self._stream_mode
         recursion_limit = config.get("recursion_limit", 25)
+        max_concurrency = config.get("max_concurrency")
 
         # Restore channels from checkpoint
         channels = self._init_channels(config)
@@ -230,7 +231,7 @@ class Pregel(Runnable[dict, dict]):
 
             # EXECUTE: run planned nodes concurrently
             updates: dict[str, dict] = {}
-            with ThreadPoolExecutor() as executor:
+            with ThreadPoolExecutor(max_workers=max_concurrency) as executor:
                 futures = {}
                 for node_name in to_fire:
                     node = self.nodes[node_name]
@@ -263,7 +264,7 @@ class Pregel(Runnable[dict, dict]):
             interrupted_after = [n for n in completed if n in self.interrupt_after]
             if interrupted_after:
                 final_next = tuple(self._plan(channels, completed))
-                self._save_checkpoint(config, channels, step, completed, next_nodes=final_next)
+                self._save_checkpoint(config, channels, step + 1, completed, next_nodes=final_next)
                 break
 
             # Clear ephemeral channels between supersteps
@@ -276,7 +277,7 @@ class Pregel(Runnable[dict, dict]):
                 break
 
             # Save checkpoint
-            self._save_checkpoint(config, channels, step, completed)
+            self._save_checkpoint(config, channels, step + 1, completed)
         else:
             raise GraphRecursionError(f"Recursion limit of {recursion_limit} reached without hitting a stop condition")
 
@@ -299,6 +300,7 @@ class Pregel(Runnable[dict, dict]):
         config = ensure_config(config)
         mode = stream_mode or self._stream_mode
         recursion_limit = config.get("recursion_limit", 25)
+        max_concurrency = config.get("max_concurrency")
 
         channels = await self._ainit_channels(config)
         self._apply_writes(channels, START, input)
@@ -326,10 +328,7 @@ class Pregel(Runnable[dict, dict]):
             updates: dict[str, dict] = {}
 
             async def run_node(name: str, node: PregelNode):
-                return await arun_with_retry(
-                    lambda: _maybe_await(node.bound(state)),
-                    node.retry_policy,
-                )
+                return await _run_async_node(node, state, max_concurrency=max_concurrency)
 
             tasks = {name: asyncio.create_task(run_node(name, self.nodes[name])) for name in to_fire}
             for node_name, task in tasks.items():
@@ -353,7 +352,7 @@ class Pregel(Runnable[dict, dict]):
             interrupted_after = [n for n in completed if n in self.interrupt_after]
             if interrupted_after:
                 final_next = tuple(self._plan(channels, completed))
-                await self._asave_checkpoint(config, channels, step, completed, next_nodes=final_next)
+                await self._asave_checkpoint(config, channels, step + 1, completed, next_nodes=final_next)
                 break
 
             for ch in channels.values():
@@ -363,7 +362,7 @@ class Pregel(Runnable[dict, dict]):
             if END in self._get_triggered_nodes(channels, completed):
                 break
 
-            await self._asave_checkpoint(config, channels, step, completed)
+            await self._asave_checkpoint(config, channels, step + 1, completed)
         else:
             raise GraphRecursionError(f"Recursion limit of {recursion_limit} reached without hitting a stop condition")
 
@@ -411,11 +410,14 @@ class Pregel(Runnable[dict, dict]):
 
         state = self._read_output(channels)
 
+        next_nodes = tuple(checkpoint_tuple.metadata.get("next", ()))
+        metadata = {k: v for k, v in checkpoint_tuple.metadata.items() if k != "next"}
+
         return StateSnapshot(
             values=state,
-            next=tuple(checkpoint_tuple.metadata.get("next", ())),
+            next=next_nodes,
             config=checkpoint_tuple.config,
-            metadata=checkpoint_tuple.metadata,
+            metadata=metadata,
             created_at=checkpoint_tuple.checkpoint.get("ts"),
             parent_config=checkpoint_tuple.parent_config,
         )
@@ -440,11 +442,14 @@ class Pregel(Runnable[dict, dict]):
                 channels[name] = ch.from_checkpoint(None)
 
         state = self._read_output(channels)
+        next_nodes = tuple(checkpoint_tuple.metadata.get("next", ()))
+        metadata = {k: v for k, v in checkpoint_tuple.metadata.items() if k != "next"}
+
         return StateSnapshot(
             values=state,
-            next=tuple(checkpoint_tuple.metadata.get("next", ())),
+            next=next_nodes,
             config=checkpoint_tuple.config,
-            metadata=checkpoint_tuple.metadata,
+            metadata=metadata,
             created_at=checkpoint_tuple.checkpoint.get("ts"),
             parent_config=checkpoint_tuple.parent_config,
         )
@@ -819,13 +824,54 @@ async def _maybe_await(result):
     return result
 
 
+async def _run_async_node(
+    node: PregelNode,
+    state: dict[str, Any],
+    *,
+    max_concurrency: Optional[int] = None,
+) -> Any:
+    if max_concurrency is None:
+        return await arun_with_retry(
+            lambda: _maybe_await(node.bound(state)),
+            node.retry_policy,
+        )
+
+    async with _get_concurrency_semaphore(max_concurrency):
+        return await arun_with_retry(
+            lambda: _maybe_await(node.bound(state)),
+            node.retry_policy,
+        )
+
+
+def _get_concurrency_semaphore(limit: int) -> asyncio.Semaphore:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.Semaphore(limit)
+
+    semaphores = getattr(loop, "_myagent_concurrency_semaphores", None)
+    if semaphores is None:
+        semaphores = {}
+        setattr(loop, "_myagent_concurrency_semaphores", semaphores)
+
+    semaphore = semaphores.get(limit)
+    if semaphore is None:
+        semaphore = asyncio.Semaphore(limit)
+        semaphores[limit] = semaphore
+    return semaphore
+
+
 def _run_sync_node(node: PregelNode, state: dict[str, Any]) -> Any:
-    """Execute a node in the sync runtime, awaiting async callables in the worker thread."""
+    """Execute a node in the sync runtime."""
     result = node.bound(state)
     if asyncio.iscoroutine(result):
-        return asyncio.run(result)
+        result.close()
+        raise TypeError(f'No synchronous function provided to "{node.name}". Use ainvoke() or astream() instead.')
     if inspect.isawaitable(result):
-        return asyncio.run(_coerce_awaitable(result))
+        close = getattr(result, "close", None)
+        if callable(close):
+            close()
+        raise TypeError(f'No synchronous function provided to "{node.name}". Use ainvoke() or astream() instead.')
     return result
 
 

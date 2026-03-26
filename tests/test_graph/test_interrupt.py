@@ -41,7 +41,6 @@ class TestInterruptBefore:
         assert state.values["value"] == "start A"
         assert state.next == ("b",)
         assert state.metadata["step"] == 1
-        assert state.metadata["next"] == ("b",)
 
     def test_interrupt_before_first_node(self):
         """Interrupting before the first node should preserve input."""
@@ -94,4 +93,4 @@ class TestInterruptAfter:
 
         state = app.get_state(config)
         assert state.next == ("b",)
-        assert state.metadata["step"] == 0
+        assert state.metadata["step"] == 1

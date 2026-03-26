@@ -25,8 +25,8 @@ class TestAsyncCompat:
         graph.add_edge("a", END)
         app = graph.compile()
 
-        result = app.invoke({"value": "test"})
-        assert result["value"] == "test truly_async"
+        with pytest.raises(TypeError):
+            app.invoke({"value": "test"})
 
     def test_stream_with_async_node(self, StateGraph, START, END):
         async def async_node(state: AsyncState) -> dict:
@@ -38,8 +38,8 @@ class TestAsyncCompat:
         graph.add_edge("a", END)
         app = graph.compile()
 
-        chunks = list(app.stream({"value": "test"}))
-        assert chunks[-1]["value"] == "test streamed_async"
+        with pytest.raises(TypeError):
+            list(app.stream({"value": "test"}))
 
     @pytest.mark.asyncio
     async def test_ainvoke(self, StateGraph, START, END):

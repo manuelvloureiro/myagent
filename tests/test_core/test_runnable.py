@@ -67,6 +67,14 @@ class TestRunnableLambda:
         results = r.batch([1, 2, 3])
         assert results == [2, 4, 6]
 
+    def test_batch_accepts_config_sequence(self):
+        def fn(x, config):
+            return x + config.get("metadata", {}).get("offset", 0)
+
+        r = RunnableLambda(fn)
+        results = r.batch([1, 2], ({"metadata": {"offset": 10}}, {"metadata": {"offset": 20}}))
+        assert results == [11, 22]
+
     @pytest.mark.asyncio
     async def test_ainvoke(self):
         r = RunnableLambda(lambda x: x * 3)

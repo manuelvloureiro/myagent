@@ -5,14 +5,9 @@ from typing import Annotated, TypedDict
 import pytest
 from myagent.graph import END, START, StateGraph
 
-# -- helpers --
-
 
 def _append(left: list, right: list) -> list:
     return left + right
-
-
-# -- state schemas --
 
 
 class ParentState(TypedDict):
@@ -41,12 +36,7 @@ class CounterState(TypedDict):
     items: Annotated[list[str], _append]
 
 
-# -- child graphs (compiled once, reused in tests) --
-
-
 def _build_child_graph() -> StateGraph:
-    """Simple child: appends ' child' to input_value."""
-
     def process(state: ChildState) -> dict:
         return {"output_value": state["input_value"] + " child"}
 
@@ -58,8 +48,6 @@ def _build_child_graph() -> StateGraph:
 
 
 def _build_math_child() -> StateGraph:
-    """Child that multiplies x * y."""
-
     def multiply(state: InnerState) -> dict:
         return {"y": state["x"] * state["y"]}
 
@@ -71,8 +59,6 @@ def _build_math_child() -> StateGraph:
 
 
 def _build_conditional_child() -> StateGraph:
-    """Child with conditional edges."""
-
     def check(state: ChildState) -> dict:
         return {}
 
@@ -98,12 +84,8 @@ def _build_conditional_child() -> StateGraph:
     return child
 
 
-# -- tests --
-
-
 class TestSubgraphBasic:
     def test_simple_subgraph(self):
-        """Parent invokes a child graph via add_subgraph."""
         child = _build_child_graph().compile()
 
         parent = StateGraph(ParentState)
@@ -130,7 +112,6 @@ class TestSubgraphBasic:
         assert result["child_result"] == "hello before child"
 
     def test_subgraph_with_post_processing(self):
-        """Parent node runs after subgraph completes."""
         child = _build_child_graph().compile()
 
         def after(state: ParentState) -> dict:
@@ -156,7 +137,6 @@ class TestSubgraphBasic:
         assert result["value"] == "start child after"
 
     def test_subgraph_with_math(self):
-        """Subgraph performs computation, output_map writes to different parent keys."""
         child = _build_math_child().compile()
 
         parent = StateGraph(OuterState)
@@ -177,7 +157,6 @@ class TestSubgraphBasic:
 
 class TestSubgraphConditional:
     def test_conditional_routing_to_subgraph(self):
-        """Parent conditional edge routes to a subgraph node."""
         child = _build_child_graph().compile()
 
         def router(state: ParentState) -> str:
@@ -203,16 +182,13 @@ class TestSubgraphConditional:
 
         app = parent.compile()
 
-        # Route to child
         result = app.invoke({"value": "use_child please"})
         assert result["child_result"] == "use_child please child"
 
-        # Route to skip
         result = app.invoke({"value": "nope"})
         assert result["child_result"] == "skipped"
 
     def test_subgraph_with_internal_conditional(self):
-        """Child graph has its own conditional edges."""
         child = _build_conditional_child().compile()
 
         parent = StateGraph(ParentState)
@@ -236,7 +212,6 @@ class TestSubgraphConditional:
 
 class TestSubgraphReducers:
     def test_output_map_with_reducer(self):
-        """Output from subgraph goes through parent's reducer."""
         child = _build_child_graph().compile()
 
         parent = StateGraph(CounterState)
@@ -257,7 +232,6 @@ class TestSubgraphReducers:
 
 class TestSubgraphMultiple:
     def test_two_subgraphs_sequential(self):
-        """Two subgraphs in sequence."""
         child_a = _build_child_graph().compile()
         child_b = _build_child_graph().compile()
 
@@ -286,7 +260,6 @@ class TestSubgraphMultiple:
         assert result["child_result"] == "start child child"
 
     def test_subgraph_and_regular_node_mixed(self):
-        """Mix of regular nodes and subgraphs."""
         child = _build_child_graph().compile()
 
         def step_a(state: ParentState) -> dict:
@@ -320,7 +293,6 @@ class TestSubgraphMultiple:
 class TestSubgraphAsync:
     @pytest.mark.asyncio
     async def test_async_subgraph(self):
-        """Subgraph works with ainvoke."""
         child = _build_child_graph().compile()
 
         parent = StateGraph(ParentState)
@@ -340,8 +312,6 @@ class TestSubgraphAsync:
 
     @pytest.mark.asyncio
     async def test_async_subgraph_with_async_child_nodes(self):
-        """Child graph with async node functions."""
-
         async def async_process(state: ChildState) -> dict:
             return {"output_value": state["input_value"] + " async_child"}
 
@@ -369,7 +339,6 @@ class TestSubgraphAsync:
 
 class TestSubgraphStream:
     def test_stream_values_with_subgraph(self):
-        """Streaming in values mode includes subgraph updates."""
         child = _build_child_graph().compile()
 
         parent = StateGraph(ParentState)
@@ -385,12 +354,10 @@ class TestSubgraphStream:
         app = parent.compile()
         chunks = list(app.stream({"value": "hello"}, stream_mode="values"))
 
-        # Should have at least initial state + post-child state
         assert len(chunks) >= 2
         assert chunks[-1]["child_result"] == "hello child"
 
     def test_stream_updates_with_subgraph(self):
-        """Streaming in updates mode shows subgraph node updates."""
         child = _build_child_graph().compile()
 
         parent = StateGraph(ParentState)
@@ -407,6 +374,5 @@ class TestSubgraphStream:
         chunks = list(app.stream({"value": "hello"}, stream_mode="updates"))
 
         assert len(chunks) >= 1
-        # The update should be attributed to the "child" node
         assert "child" in chunks[0]
         assert chunks[0]["child"]["child_result"] == "hello child"

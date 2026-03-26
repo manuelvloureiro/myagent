@@ -43,7 +43,7 @@ class StateGraph:
         self._edges: dict[str, list[str]] = {}  # source -> [target]
         self._conditional_edges: dict[str, list[tuple[Callable, Optional[dict[str, str]]]]] = {}
         self._channels: dict[str, BaseChannel] = {}
-        self._subgraphs: dict[str, tuple[Any, Callable, Callable]] = {}  # name -> (compiled, input_map, output_map)
+        self._subgraphs: dict[str, tuple[Any, Callable, Callable]] = {}
 
         # Introspect state schema to build channels
         self._build_channels()
@@ -98,22 +98,7 @@ class StateGraph:
         input_map: Callable,
         output_map: Callable,
     ) -> StateGraph:
-        """Add a compiled sub-graph as a node.
-
-        The sub-graph runs its own superstep loop within a single parent
-        superstep.  ``input_map`` extracts sub-graph input from the parent
-        state; ``output_map`` merges sub-graph output back into parent
-        state updates.
-
-        Args:
-            name: Node name in the parent graph.
-            compiled_graph: A compiled ``StateGraph`` (has ``.invoke()``
-                and ``.ainvoke()``).
-            input_map: ``(parent_state: dict) -> dict`` producing the
-                sub-graph's input.
-            output_map: ``(child_result: dict, parent_state: dict) -> dict``
-                producing updates to write back to the parent's channels.
-        """
+        """Add a compiled sub-graph as a node."""
         self._subgraphs[name] = (compiled_graph, input_map, output_map)
         return self
 
@@ -139,6 +124,8 @@ class StateGraph:
         then: Optional[str] = None,
     ) -> StateGraph:
         """Add conditional edges from source using a router function."""
+        if then is not None:
+            raise NotImplementedError("add_conditional_edges(..., then=...) is not supported in myagent")
         self._conditional_edges.setdefault(source, []).append((path, path_map))
         return self
 
@@ -179,12 +166,10 @@ class StateGraph:
                 retry_policy=self._node_retry_policies.get(name),
             )
 
-        # Build subgraph wrapper nodes
         for name, (compiled, input_map, output_map) in self._subgraphs.items():
             nodes[name] = PregelNode(
                 name=name,
                 bound=_make_subgraph_wrapper(compiled, input_map, output_map),
-                metadata={"is_subgraph": True},
             )
 
         return CompiledStateGraph(
@@ -206,27 +191,20 @@ def _make_subgraph_wrapper(
     input_map: Callable,
     output_map: Callable,
 ) -> Callable:
-    """Create a node function that invokes a compiled sub-graph.
-
-    The wrapper detects whether it's running in an async context and
-    calls ``ainvoke`` or ``invoke`` accordingly.
-    """
-    import inspect
-
-    async def _async_wrapper(state: dict) -> dict:
+    async def _async_invoke(state: dict) -> dict:
         sub_input = input_map(state)
-        if inspect.iscoroutinefunction(getattr(compiled_graph, "ainvoke", None)):
-            result = await compiled_graph.ainvoke(sub_input)
-        else:
+        result = await compiled_graph.ainvoke(sub_input)
+        return output_map(result, state)
+
+    def _wrapper(state: dict) -> Any:
+        sub_input = input_map(state)
+        try:
+            import asyncio
+
+            asyncio.get_running_loop()
+        except RuntimeError:
             result = compiled_graph.invoke(sub_input)
-        return output_map(result, state)
+            return output_map(result, state)
+        return _async_invoke(state)
 
-    def _sync_wrapper(state: dict) -> dict:
-        sub_input = input_map(state)
-        result = compiled_graph.invoke(sub_input)
-        return output_map(result, state)
-
-    # Return an async wrapper so the Pregel engine can detect and await it.
-    # The sync fallback is handled by _run_sync_node in loop.py which calls
-    # asyncio.run() on coroutines.
-    return _async_wrapper
+    return _wrapper
